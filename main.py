@@ -3,15 +3,16 @@ import cv2
 import random
 import imutils
 import colorsys
+import threading
 
 import numpy as np
-
 import tensorflow as tf
 
 from PIL import Image
+from time import time
+from threading import Thread
 from yolov3.yolov4 import Create_Yolo
 
-from time import time
 
 VIDEOS_DIR = r"./videos"
 
@@ -19,6 +20,117 @@ CLASSES = {0: '0', 1: '1', 2: '2', 3: '3', 4: '4',
            5: '5', 6: '6', 7: '7', 8: '8', 9: '9'}
 
 
+def main():
+
+    NUM_CLASS = CLASSES
+
+    yolo = Create_Yolo(input_size=416, CLASSES=CLASSES)
+    yolo.load_weights(f"yolov3_custom_Tiny")
+
+    
+    cap = cv2.VideoCapture(0)
+    if cap.isOpened():
+        current_digit = None
+        video_thread = None
+        video_names = os.listdir(VIDEOS_DIR)
+        while True:
+            
+            _, frame = cap.read()
+            image_h, image_w, _ = frame.shape
+            # lt = time()
+            bboxes = detect_digit(yolo, frame, CLASSES)
+            
+            bbox_thick = int(0.6 * (image_h + image_w) / 1000)
+            if bbox_thick < 1:
+                bbox_thick = 1
+            # fontScale = 0.75 * bbox_thick
+
+            digits = []
+            for bbox in bboxes:
+                coor = np.array(bbox[:4], dtype=np.int32)
+                score = bbox[4]
+                if score > 0.8:
+                    class_ind = int(bbox[5])
+                    digit = NUM_CLASS[class_ind]
+                    
+                    if current_digit != digit:
+                        
+                        digits.append(digit)
+
+                        frame = cap.read()[1]
+
+                        (x1, y1), (x2, y2) = (coor[0], coor[1]), (coor[2], coor[3])
+
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), bbox_thick*2)
+
+                        for video_name in video_names:
+                            if digit == video_name.split('.')[0]:
+
+                                if video_thread and video_thread.is_alive():
+                                    video_thread.do_run = False
+                                    video_thread.join()
+                                    current_digit = None
+                                else:
+                                    video_thread = Thread(target=show_video, args=(video_name, digit, frame, coor))
+                                    video_thread.start()
+                                    current_digit = digit
+
+                                break
+                    if video_thread and not video_thread.is_alive():
+                        current_digit = None
+            k = cv2.waitKey(33)
+            
+            if k == 27:
+                break                        
+  
+            cv2.imshow('frame', frame)
+            
+
+    else:
+        print("Камера не найдена")
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+def show_video(video_name, digit, frame, coor):
+    video_cap = cv2.VideoCapture(os.path.join(VIDEOS_DIR, video_name))
+    window_name = str(digit)
+    toggle = False
+    (x1, y1), (x2, y2) = (coor[0], coor[1]), (coor[2], coor[3])
+    t = threading.currentThread()
+    while video_cap.isOpened() and getattr(t, "do_run", True):
+
+        try:
+            video_frame = video_cap.read()[1]
+
+            video_h, video_w, _ = video_frame.shape
+
+            cv2.namedWindow(window_name, cv2.WND_PROP_FULLSCREEN)
+            cv2.setWindowProperty(window_name,cv2.WND_PROP_FULLSCREEN,cv2.WINDOW_FULLSCREEN)
+                    
+            k = cv2.waitKey(33)
+            
+            if k == ord('c'):
+
+                toggle = not toggle
+
+            if toggle:
+                
+                video_frame[video_h - (y2 - y1):, video_w - (x2 - x1):] = frame[y1: y2, x1: x2]
+
+            cv2.imshow(window_name, video_frame)
+            if k == 27:
+                
+                video_cap.release()
+                cv2.destroyWindow(window_name)
+                break
+        except:
+            break
+    
+    video_cap.release()
+    cv2.destroyWindow(window_name)
+
+    
 def bboxes_iou(boxes1, boxes2):
     boxes1 = np.array(boxes1)
     boxes2 = np.array(boxes2)
@@ -170,90 +282,6 @@ def detect_digit(Yolo, frame, CLASSES, input_size=416, show=False, score_thresho
 
 
     return bboxes
-
-
-def main():
-
-    NUM_CLASS = CLASSES
-
-    yolo = Create_Yolo(input_size=416, CLASSES=CLASSES)
-    yolo.load_weights(f"yolov3_custom_Tiny")
-
-    toggle = False
-    cap = cv2.VideoCapture(0)
-    if cap.isOpened():
-        while True:
-            _, frame = cap.read()
-            image_h, image_w, _ = frame.shape
-            # lt = time()
-            bboxes = detect_digit(yolo, frame, CLASSES)
-            # frame = draw_bbox(frame, bboxes, CLASSES=CLASSES,
-            #                   rectangle_colors='', show_label=False, show_confidence=False,)
-            
-            bbox_thick = int(0.6 * (image_h + image_w) / 1000)
-            if bbox_thick < 1:
-                bbox_thick = 1
-            # fontScale = 0.75 * bbox_thick
-
-            digits = []
-            for bbox in bboxes:
-                coor = np.array(bbox[:4], dtype=np.int32)
-                score = bbox[4]
-                if score > 0.8:
-                    class_ind = int(bbox[5])
-                    digit = NUM_CLASS[class_ind]
-                    digits.append(digit)
-
-                    frame = cap.read()[1]
-
-                    (x1, y1), (x2, y2) = (coor[0], coor[1]), (coor[2], coor[3])
-
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), bbox_thick*2)
-
-                    for video_name in os.listdir(VIDEOS_DIR):
-                        if digit == video_name.split('.')[0]:
-
-                            video_cap = cv2.VideoCapture(os.path.join(VIDEOS_DIR, video_name))
-                            window_name = str(digit)
-                            while video_cap.isOpened():
-
-                                video_frame = video_cap.read()[1]
-
-                                video_h, video_w, _ = _ = video_frame.shape
-
-                                cv2.namedWindow(window_name, cv2.WND_PROP_FULLSCREEN)
-                                cv2.setWindowProperty(window_name,cv2.WND_PROP_FULLSCREEN,cv2.WINDOW_FULLSCREEN)
-
-                                k = cv2.waitKey(10)                
-                                    
-                                
-                                if k == 27:
-                                    
-                                    video_cap.release()
-                                    cv2.destroyWindow(window_name)
-                                    break
-                                elif k == ord('c'):
-
-                                    toggle = not toggle
-
-                                if toggle:
-                                    
-                                    video_frame[video_h - (y2 - y1):, video_w - (x2 - x1):] = frame[y1: y2, x1: x2]
-
-                                cv2.imshow(window_name, video_frame)
-                                    
-            # print('Time ===========', time() - lt)
-
-            cv2.imshow('frame', frame)
-            
-            if cv2.waitKey(10) & 0xFF == 27:
-                break
-
-    else:
-        print("Камера не найдена")
-
-    cap.release()
-    cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
